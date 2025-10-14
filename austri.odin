@@ -24,6 +24,13 @@ HTTP_Request :: struct {
     path: string,
 }
 
+HTTP_Server_Config :: struct {
+    routes: map[string]proc(HTTP_Request),
+    port: int,
+    address: net.Address,
+    multithread: bool,
+}
+
 HTTP_Response_Code :: enum {
     CONTINUE, // 100
     SWITCHING_PROTOCOLS, // 101
@@ -89,7 +96,7 @@ HTTP_Response_Code :: enum {
     NETWORK_AUTH_REQ,   // 511
 }
 
-getResponseCodeString :: proc(code: HTTP_Response_Code) -> string {
+get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
     switch code {
     case .CONTINUE: return "100 Continue"
     case .SWITCHING_PROTOCOLS: return "101 Switching Protocols"
@@ -172,11 +179,16 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
     return "text/plain"
 }
 
-send_response :: proc(client: net.TCP_Socket, status_code: HTTP_Response_Code = HTTP_Response_Code.OK, body: string, content_type: HTTP_Content_Type = HTTP_Content_Type.TEXT_PLAIN) {
+send_response :: proc(
+    client: net.TCP_Socket,
+    status_code: HTTP_Response_Code = HTTP_Response_Code.OK,
+    body: string,
+    content_type: HTTP_Content_Type = HTTP_Content_Type.TEXT_PLAIN
+    ) {
     content_length := len(body)
 
     response := strings.concatenate([]string{
-        "HTTP/1.1 ", getResponseCodeString(status_code), "\r\n",
+        "HTTP/1.1 ", get_response_code_string(status_code), "\r\n",
         "Content-Type: ", get_content_type_string(content_type), "\r\n",
         "Content-Length: ", fmt.tprint(content_length), "\r\n",
         "\r\n",
@@ -229,33 +241,22 @@ handle_client :: proc(client: net.TCP_Socket, routes: map[string]proc(HTTP_Reque
     send_response(request.conn, HTTP_Response_Code.NOT_FOUND, strings.concatenate([]string{"You are requesting: ", request.path, " which doesn't exist :("}), HTTP_Content_Type.TEXT_PLAIN)
 }
 
-handle_html :: proc(request: HTTP_Request) {
-    send_response(request.conn, HTTP_Response_Code.OK, "<h1>Hello, World</h1>", HTTP_Content_Type.TEXT_HTML)
+listen :: proc {
+    listen_config,
+    listen_values,
 }
 
-handle_index :: proc(request: HTTP_Request) {
-    send_response(client = request.conn, body = "Hello, World!")
-}
-
-main :: proc() {
-    context.logger = log.create_console_logger(.Debug)
-
-    routes: map[string]proc(HTTP_Request)
-    defer delete(routes)
-
-    routes["/html"] = handle_html
-    routes["/"] = handle_index
-
-	sock, listen_err := net.listen_tcp(net.Endpoint{
-        port = 8080,
-        address = net.IP4_Loopback
+listen_config :: proc(server_config: HTTP_Server_Config) {
+    sock, listen_err := net.listen_tcp(net.Endpoint{
+        port = server_config.port,
+        address = server_config.address
     })
     defer net.close(sock)
 
     if listen_err != nil {
         log.fatal("Couldn't create TCP Socket: ", listen_err)
         return
-	}
+    }
 
     for {
         client, src, accept_err := net.accept_tcp(sock)
@@ -266,7 +267,15 @@ main :: proc() {
 
         log.info("Got new connection from: ", src)
 
-        thread.run_with_poly_data2(client, routes, handle_client)
+        thread.run_with_poly_data2(client, server_config.routes, handle_client)
     }
 }
 
+listen_values :: proc(
+    routes: map[string]proc(HTTP_Request),
+    port: int,
+    address: net.Address = net.IP4_Loopback,
+    multithread: bool = true
+    ) {
+    listen_config(HTTP_Server_Config{routes = routes, port = port, address = net.IP4_Loopback, multithread = true})
+}
