@@ -229,6 +229,13 @@ handle_client :: proc(client: net.TCP_Socket, routes: map[string]proc(HTTP_Reque
     switch req_header_split[0] {
     case "GET": req_type = HTTP_Requst_Type.GET
     case "POST": req_type = HTTP_Requst_Type.POST
+    case "PUT": req_type = HTTP_Requst_Type.PUT
+    case "PATCH": req_type = HTTP_Requst_Type.PATCH
+    case "CONNECT": req_type = HTTP_Requst_Type.CONNECT
+    case "DELETE": req_type = HTTP_Requst_Type.DELETE
+    case "HEAD": req_type = HTTP_Requst_Type.HEAD
+    case "OPTIONS": req_type = HTTP_Requst_Type.OPTIONS
+    case "TRACE": req_type = HTTP_Requst_Type.TRACE
     }
 
     request := HTTP_Request{ client, req_type, req_header_split[1] }
@@ -258,16 +265,30 @@ listen_config :: proc(server_config: HTTP_Server_Config) {
         return
     }
 
-    for {
-        client, src, accept_err := net.accept_tcp(sock)
-        if accept_err != nil {
-            log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
-            continue
+    if server_config.multithread == true {
+        for {
+            client, src, accept_err := net.accept_tcp(sock)
+            if accept_err != nil {
+                log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
+                continue
+            }
+
+            log.info("Got new connection from: ", src)
+
+            thread.run_with_poly_data2(client, server_config.routes, handle_client)
         }
+    } else {
+        for {
+            client, src, accept_err := net.accept_tcp(sock)
+            if accept_err != nil {
+                log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
+                continue
+            }
 
-        log.info("Got new connection from: ", src)
+            log.info("Got new connection from: ", src)
 
-        thread.run_with_poly_data2(client, server_config.routes, handle_client)
+            thread.run_with_poly_data2(client, server_config.routes, handle_client)
+        }
     }
 }
 
