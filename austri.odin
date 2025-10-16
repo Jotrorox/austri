@@ -29,6 +29,8 @@ HTTP_Server_Config :: struct {
 	port:        int,
 	address:     net.Address,
 	multithread: bool,
+	maxRequestSize: int,
+	logger: log.Logger,
 }
 
 HTTP_Response_Code :: enum {
@@ -319,11 +321,12 @@ send_response :: proc(
 	net.send(client, transmute([]u8)response)
 }
 
-handle_client :: proc(client: net.TCP_Socket, routes: map[string]proc(_: HTTP_Request)) {
-	context.logger = log.create_console_logger(.Debug) // TODO: Make customizsable in the future
+handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config) {
+	context.logger = (server_config^).logger
 	defer net.close(client)
 
-	buffer: [4096]u8
+	buffer := make([]byte, (server_config^).maxRequestSize)
+	defer delete(buffer)
 	bytes_read, read_err := net.recv(client, buffer[:])
 	if read_err != nil {
 		log.warn("Error reading from client: ", read_err)
@@ -351,7 +354,7 @@ handle_client :: proc(client: net.TCP_Socket, routes: map[string]proc(_: HTTP_Re
 	log.info("Recieved request: ", req_split[0])
 
 	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
-	if req_header_split_err != nil {
+	if req_header_split_err != nil || len(req_header_split) < 2 {
 		log.warn("Error splitting the request Header: ", req_header_split_err)
 		send_response(
 			client,
@@ -386,8 +389,8 @@ handle_client :: proc(client: net.TCP_Socket, routes: map[string]proc(_: HTTP_Re
 
 	request := HTTP_Request{client, req_type, req_header_split[1]}
 
-	if request.path in routes {
-		routes[request.path](request)
+	if request.path in (server_config^).routes {
+		(server_config^).routes[request.path](request)
 		return
 	}
 
@@ -406,7 +409,7 @@ listen :: proc {
 	listen_values,
 }
 
-listen_config :: proc(server_config: HTTP_Server_Config) {
+listen_config :: proc(server_config: ^HTTP_Server_Config) {
 	sock, listen_err := net.listen_tcp(
 		net.Endpoint{port = server_config.port, address = server_config.address},
 	)
@@ -427,7 +430,7 @@ listen_config :: proc(server_config: HTTP_Server_Config) {
 
 			log.info("Got new connection from: ", src)
 
-			thread.run_with_poly_data2(client, server_config.routes, handle_client)
+			thread.run_with_poly_data2(client, server_config, handle_client)
 		}
 	} else {
 		for {
@@ -439,7 +442,7 @@ listen_config :: proc(server_config: HTTP_Server_Config) {
 
 			log.info("Got new connection from: ", src)
 
-			thread.run_with_poly_data2(client, server_config.routes, handle_client)
+			thread.run_with_poly_data2(client, server_config, handle_client)
 		}
 	}
 }
@@ -449,13 +452,16 @@ listen_values :: proc(
 	port: int,
 	address: net.Address = net.IP4_Loopback,
 	multithread: bool = true,
+	logger: log.Logger
 ) {
 	listen_config(
-		HTTP_Server_Config {
+		&HTTP_Server_Config {
 			routes = routes,
 			port = port,
 			address = net.IP4_Loopback,
 			multithread = true,
+			maxRequestSize = 4096,
+			logger = logger,
 		},
 	)
 }

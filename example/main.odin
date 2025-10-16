@@ -1,6 +1,7 @@
 package main
 
 import austri "../"
+import "core:log"
 
 handle_simple_css :: proc(request: austri.HTTP_Request) {
 	austri.send_response(
@@ -32,5 +33,5 @@ main :: proc() {
 	routes["/simple-css"] = handle_simple_css
 	routes["/"] = handle_index
 
-	austri.listen(routes, 8080)
+	austri.listen(routes, 8080, logger = log.create_console_logger(.Debug))
 }
