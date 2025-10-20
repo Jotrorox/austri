@@ -5,8 +5,8 @@ import log "core:log"
 import net "core:net"
 import strings "core:strings"
 import thread "core:thread"
-import sync "core:sync"
 
+// HTTP request methods as defined in the HTTP/1.1 specification.
 HTTP_Request_Type :: enum {
 	GET,
 	POST,
@@ -19,18 +19,79 @@ HTTP_Request_Type :: enum {
 	PATCH,
 }
 
+// Represents an incoming HTTP request.
+//
+// Fields:
+// - conn: The underlying TCP socket connection for the client.
+// - type: The HTTP method of the request (e.g., GET, POST).
+// - path: The requested URI path.
+// - params: Map of route parameters captured from templated routes,
+//           e.g., for route "/user/:id" and path "/user/123", params["id"] = "123".
 HTTP_Request :: struct {
 	conn: net.TCP_Socket,
 	type: HTTP_Request_Type,
 	path: string,
+	params: map[string]string,
 }
 
+// Defines a route for the HTTP server.
+//
+// Fields:
+// - path: The route path, supporting templating with ":param_name" placeholders,
+//         e.g., "/user/:id" captures the "id" segment into request.params.
+// - handler: The procedure called to handle matching requests.
+// - type: The HTTP method this route responds to (e.g., GET, POST).
 HTTP_Route :: struct {
 	path:    string,
 	handler: proc(_: HTTP_Request),
 	type:    HTTP_Request_Type,
 }
 
+// Matches a request path against a templated route pattern, populating the params map with captured values if matched.
+//
+// Parameters:
+// - pattern: The route pattern with placeholders, e.g., "/user/:id".
+// - path: The actual request path to match, e.g., "/user/123".
+// - params: Pointer to a map where captured parameters will be stored, e.g., params["id"] = "123".
+//
+// Returns: true if the path matches the pattern exactly (including segment count), false otherwise.
+//
+// Notes: Supports only simple path segment parameters prefixed with ":". Does not handle query parameters or wildcards.
+match_route :: proc(pattern: string, path: string, params: ^map[string]string) -> bool {
+	pattern_segments := strings.split(pattern, "/")
+	defer delete(pattern_segments)
+	
+	path_segments := strings.split(path, "/")
+	defer delete(path_segments)
+	
+	if len(pattern_segments) != len(path_segments) {
+		return false
+	}
+	
+	for i in 0..<len(pattern_segments) {
+		pattern_seg := pattern_segments[i]
+		path_seg := path_segments[i]
+		
+		if strings.has_prefix(pattern_seg, ":") {
+			param_name := pattern_seg[1:]
+			params[param_name] = path_seg
+		} else if pattern_seg != path_seg {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// Configuration structure for the HTTP server.
+//
+// Fields:
+// - routes: Slice of HTTP_Route entries defining the server's endpoints.
+// - port: The TCP port to listen on.
+// - address: The IP address to bind the server to.
+// - multithread: If true, handle each client connection in a separate thread for concurrency.
+// - maxRequestSize: Maximum bytes to read from incoming requests (default: 4096).
+// - logger: The logger instance for server logs (info, warn, error).
 HTTP_Server_Config :: struct {
 	routes:         []HTTP_Route,
 	port:           int,
@@ -40,6 +101,7 @@ HTTP_Server_Config :: struct {
 	logger:         log.Logger,
 }
 
+// Standard HTTP response status codes as defined in HTTP/1.1 and extensions.
 HTTP_Response_Code :: enum {
 	CONTINUE, // 100
 	SWITCHING_PROTOCOLS, // 101
@@ -105,6 +167,12 @@ HTTP_Response_Code :: enum {
 	NETWORK_AUTH_REQ, // 511
 }
 
+// Returns the standard string representation of an HTTP response status code (e.g., "200 OK").
+//
+// Parameters:
+// - code: The HTTP_Response_Code enum value to convert.
+//
+// Returns: The status line string, or "500 Internal Server Error" for unrecognized codes.
 get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
 	switch code {
 	case .CONTINUE:
@@ -235,6 +303,7 @@ get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
 	return "500 Internal Server Error"
 }
 
+// Common MIME types for HTTP content negotiation and responses.
 HTTP_Content_Type :: enum {
 	TEXT_PLAIN,
 	TEXT_HTML,
@@ -271,6 +340,12 @@ HTTP_Content_Type :: enum {
 	FONT_OTF,
 }
 
+// Returns the MIME type string for a given HTTP_Content_Type enum value.
+//
+// Parameters:
+// - code: The HTTP_Content_Type enum value.
+//
+// Returns: The corresponding MIME type string, or "text/plain" for unrecognized types.
 get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 	switch code {
 	case .TEXT_PLAIN:
@@ -343,6 +418,15 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 	return "text/plain"
 }
 
+// Sends a basic HTTP/1.1 response to the client socket.
+//
+// Parameters:
+// - client: The TCP socket connected to the client.
+// - status_code: The response status code (default: .OK / 200).
+// - body: The content to send in the response body.
+// - content_type: The MIME type of the body (default: .TEXT_PLAIN).
+//
+// Notes: Includes Content-Type and Content-Length headers. No additional headers like Server or Date.
 send_response :: proc(
 	client: net.TCP_Socket,
 	status_code: HTTP_Response_Code = HTTP_Response_Code.OK,
@@ -370,6 +454,14 @@ send_response :: proc(
 	net.send(client, transmute([]u8)response)
 }
 
+// Processes an incoming client request: parses headers, matches routes, and invokes the handler or sends error response.
+//
+// Parameters:
+// - client: The accepted TCP socket from the client.
+// - server_config: Pointer to the server's configuration (routes, logger, etc.).
+//
+// Notes: Reads up to maxRequestSize bytes. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, CONNECT.
+//        Matches static routes first, then templated ones. Logs request and errors. Closes client socket on exit.
 handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config) {
 	context.logger = (server_config^).logger
 	defer net.close(client)
@@ -436,15 +528,25 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		req_type = HTTP_Request_Type.TRACE
 	}
 
-	request := HTTP_Request{client, req_type, req_header_split[1]}
+	request := HTTP_Request{client, req_type, req_header_split[1], make(map[string]string)}
 
 	for route in (server_config^).routes {
-		if (route.path == request.path && route.type == request.type) {
+		if !strings.contains(route.path, ":") && route.path == request.path && route.type == request.type {
 			route.handler(request)
 			return
 		}
 	}
 
+	for route in (server_config^).routes {
+		if strings.contains(route.path, ":") && route.type == request.type {
+			if match_route(route.path, request.path, &request.params) {
+				route.handler(request)
+				return
+			}
+		}
+	}
+
+	delete(request.params)
 	send_response(
 		request.conn,
 		HTTP_Response_Code.NOT_FOUND,
@@ -460,6 +562,14 @@ listen :: proc {
 	listen_values,
 }
 
+// Listens for incoming TCP connections and dispatches them to handlers in a loop.
+//
+// Parameters:
+// - server_config: Pointer to the HTTP_Server_Config with routes, port, etc.
+//
+// Notes: Binds to the specified address and port. Accepts connections indefinitely.
+//        If multithread is true, spawns a thread per client using thread.run_with_poly_data2.
+//        Logs server start, connections, and errors. Graceful shutdown logs on exit.
 listen_config :: proc(server_config: ^HTTP_Server_Config) {
 	sock, listen_err := net.listen_tcp(
 		net.Endpoint{port = server_config.port, address = server_config.address},
@@ -492,6 +602,17 @@ listen_config :: proc(server_config: ^HTTP_Server_Config) {
 	log.info("Server shutting down gracefully")
 }
 
+// Convenience procedure to start the server with explicit values, constructing config internally.
+//
+// Parameters:
+// - routes: Slice of HTTP_Route to handle requests.
+// - port: The port number to bind to.
+// - address: The IP address (default: net.IP4_Loopback / 127.0.0.1).
+// - multithread: Enable threaded client handling (default: true).
+// - logger: The log.Logger for server output.
+//
+// Notes: Sets maxRequestSize to 4096 bytes. Calls listen_config with the built config.
+//        Use this for quick server setup without manually creating HTTP_Server_Config.
 listen_values :: proc(
 	routes: []HTTP_Route,
 	port: int,
