@@ -5,6 +5,7 @@ DISCLAIMER: THIS IS NOT EVEN NEAR PRODUCTION READY AND HAS A LOT OF BUGS AND SEC
 Features:
 - HTTP/1.1 Support
 - Custom responses
+- Templated Routes
 - not that much more currently tbh
 
 License: BSD 2-Clause

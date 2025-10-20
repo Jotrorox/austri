@@ -1,6 +1,6 @@
 package main
 
-import austri "../"
+import austri "../../"
 import "core:log"
 import fmt "core:fmt"
 
@@ -65,5 +65,5 @@ main :: proc() {
 		{path = "/user/:id", handler = handle_user_id, type = .GET},
 	}
 
-	austri.listen(routes, 8080, logger = log.create_console_logger(.Debug))
+	austri.listen(routes, 8080, logger = log.create_console_logger(.Info))
 }

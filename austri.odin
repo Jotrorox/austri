@@ -1,3 +1,12 @@
+// 
+// Austri - A lightweight HTTP server library for Odin
+// 
+// License: BSD-2-Clause License
+// 
+// Contributors:
+// - Johannes (jotrorox) Müller <mail@jotrorox.com>
+//
+
 package austri
 
 import fmt "core:fmt"
