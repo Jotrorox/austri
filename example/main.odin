@@ -26,12 +26,7 @@ handle_index :: proc(request: austri.HTTP_Request) {
 }
 
 main :: proc() {
-	routes: map[string]proc(_: austri.HTTP_Request)
-	defer delete(routes)
-
-	routes["/html"] = handle_html
-	routes["/simple-css"] = handle_simple_css
-	routes["/"] = handle_index
+	routes := []austri.HTTP_Route{}
 
 	austri.listen(routes, 8080, logger = log.create_console_logger(.Debug))
 }

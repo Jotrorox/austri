@@ -5,8 +5,9 @@ import log "core:log"
 import net "core:net"
 import strings "core:strings"
 import thread "core:thread"
+import sync "core:sync"
 
-HTTP_Requst_Type :: enum {
+HTTP_Request_Type :: enum {
 	GET,
 	POST,
 	HEAD,
@@ -20,17 +21,23 @@ HTTP_Requst_Type :: enum {
 
 HTTP_Request :: struct {
 	conn: net.TCP_Socket,
-	type: HTTP_Requst_Type,
+	type: HTTP_Request_Type,
 	path: string,
 }
 
+HTTP_Route :: struct {
+	path:    string,
+	handler: proc(_: HTTP_Request),
+	type:    HTTP_Request_Type,
+}
+
 HTTP_Server_Config :: struct {
-	routes:      map[string]proc(_: HTTP_Request),
-	port:        int,
-	address:     net.Address,
-	multithread: bool,
+	routes:         []HTTP_Route,
+	port:           int,
+	address:        net.Address,
+	multithread:    bool,
 	maxRequestSize: int,
-	logger: log.Logger,
+	logger:         log.Logger,
 }
 
 HTTP_Response_Code :: enum {
@@ -234,20 +241,34 @@ HTTP_Content_Type :: enum {
 	TEXT_CSS,
 	TEXT_JAVASCRIPT,
 	TEXT_XML,
+	TEXT_CSV,
+	TEXT_MARKDOWN,
 	APPLICATION_JSON,
 	APPLICATION_XML,
 	APPLICATION_PDF,
 	APPLICATION_OCTET_STREAM,
+	APPLICATION_ZIP,
+	APPLICATION_GZIP,
+	APPLICATION_JAVASCRIPT,
+	APPLICATION_WWW_FORM_URLENCODED,
 	IMAGE_JPEG,
 	IMAGE_PNG,
 	IMAGE_GIF,
 	IMAGE_WEBP,
+	IMAGE_SVG,
+	IMAGE_ICON,
 	AUDIO_MPEG,
-	VIDEO_MP4,
 	AUDIO_OGG,
+	AUDIO_WAV,
+	AUDIO_WEBM,
+	VIDEO_MP4,
 	VIDEO_OGG,
+	VIDEO_WEBM,
 	MULTIPART_FORM_DATA,
-	APPLICATION_FORM_URLENCODED,
+	FONT_WOFF,
+	FONT_WOFF2,
+	FONT_TTF,
+	FONT_OTF,
 }
 
 get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
@@ -262,6 +283,10 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 		return "text/javascript"
 	case .TEXT_XML:
 		return "text/xml"
+	case .TEXT_CSV:
+		return "text/csv"
+	case .TEXT_MARKDOWN:
+		return "text/markdown"
 	case .APPLICATION_JSON:
 		return "application/json"
 	case .APPLICATION_XML:
@@ -270,6 +295,14 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 		return "application/pdf"
 	case .APPLICATION_OCTET_STREAM:
 		return "application/octet-stream"
+	case .APPLICATION_ZIP:
+		return "application/zip"
+	case .APPLICATION_GZIP:
+		return "application/gzip"
+	case .APPLICATION_JAVASCRIPT:
+		return "application/javascript"
+	case .APPLICATION_WWW_FORM_URLENCODED:
+		return "application/x-www-form-urlencoded"
 	case .IMAGE_JPEG:
 		return "image/jpeg"
 	case .IMAGE_PNG:
@@ -278,18 +311,34 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 		return "image/gif"
 	case .IMAGE_WEBP:
 		return "image/webp"
+	case .IMAGE_SVG:
+		return "image/svg+xml"
+	case .IMAGE_ICON:
+		return "image/x-icon"
 	case .AUDIO_MPEG:
 		return "audio/mpeg"
-	case .VIDEO_MP4:
-		return "video/mp4"
 	case .AUDIO_OGG:
 		return "audio/ogg"
+	case .AUDIO_WAV:
+		return "audio/wav"
+	case .AUDIO_WEBM:
+		return "audio/webm"
+	case .VIDEO_MP4:
+		return "video/mp4"
 	case .VIDEO_OGG:
 		return "video/ogg"
+	case .VIDEO_WEBM:
+		return "video/webm"
 	case .MULTIPART_FORM_DATA:
 		return "multipart/form-data"
-	case .APPLICATION_FORM_URLENCODED:
-		return "application/x-www-form-urlencoded"
+	case .FONT_WOFF:
+		return "font/woff"
+	case .FONT_WOFF2:
+		return "font/woff2"
+	case .FONT_TTF:
+		return "font/ttf"
+	case .FONT_OTF:
+		return "font/otf"
 	}
 	return "text/plain"
 }
@@ -365,33 +414,35 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		return
 	}
 
-	req_type: HTTP_Requst_Type
+	req_type: HTTP_Request_Type
 	switch req_header_split[0] {
 	case "GET":
-		req_type = HTTP_Requst_Type.GET
+		req_type = HTTP_Request_Type.GET
 	case "POST":
-		req_type = HTTP_Requst_Type.POST
+		req_type = HTTP_Request_Type.POST
 	case "PUT":
-		req_type = HTTP_Requst_Type.PUT
+		req_type = HTTP_Request_Type.PUT
 	case "PATCH":
-		req_type = HTTP_Requst_Type.PATCH
+		req_type = HTTP_Request_Type.PATCH
 	case "CONNECT":
-		req_type = HTTP_Requst_Type.CONNECT
+		req_type = HTTP_Request_Type.CONNECT
 	case "DELETE":
-		req_type = HTTP_Requst_Type.DELETE
+		req_type = HTTP_Request_Type.DELETE
 	case "HEAD":
-		req_type = HTTP_Requst_Type.HEAD
+		req_type = HTTP_Request_Type.HEAD
 	case "OPTIONS":
-		req_type = HTTP_Requst_Type.OPTIONS
+		req_type = HTTP_Request_Type.OPTIONS
 	case "TRACE":
-		req_type = HTTP_Requst_Type.TRACE
+		req_type = HTTP_Request_Type.TRACE
 	}
 
 	request := HTTP_Request{client, req_type, req_header_split[1]}
 
-	if request.path in (server_config^).routes {
-		(server_config^).routes[request.path](request)
-		return
+	for route in (server_config^).routes {
+		if (route.path == request.path && route.type == request.type) {
+			route.handler(request)
+			return
+		}
 	}
 
 	send_response(
@@ -420,48 +471,41 @@ listen_config :: proc(server_config: ^HTTP_Server_Config) {
 		return
 	}
 
-	if server_config.multithread == true {
-		for {
-			client, src, accept_err := net.accept_tcp(sock)
-			if accept_err != nil {
-				log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
-				continue
-			}
+	log.info("Server started on port ", server_config.port)
 
-			log.info("Got new connection from: ", src)
-
-			thread.run_with_poly_data2(client, server_config, handle_client)
+	for {
+		client, src, accept_err := net.accept_tcp(sock)
+		if accept_err != nil {
+			log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
+			continue
 		}
-	} else {
-		for {
-			client, src, accept_err := net.accept_tcp(sock)
-			if accept_err != nil {
-				log.warn("Error accepting connection from: ", src, " Error: ", accept_err)
-				continue
-			}
 
-			log.info("Got new connection from: ", src)
+		log.info("Got new connection from: ", src)
 
+		if server_config.multithread {
 			thread.run_with_poly_data2(client, server_config, handle_client)
+		} else {
+			handle_client(client, server_config)
 		}
 	}
+
+	log.info("Server shutting down gracefully")
 }
 
 listen_values :: proc(
-	routes: map[string]proc(_: HTTP_Request),
+	routes: []HTTP_Route,
 	port: int,
 	address: net.Address = net.IP4_Loopback,
 	multithread: bool = true,
-	logger: log.Logger
+	logger: log.Logger,
 ) {
-	listen_config(
-		&HTTP_Server_Config {
-			routes = routes,
-			port = port,
-			address = net.IP4_Loopback,
-			multithread = true,
-			maxRequestSize = 4096,
-			logger = logger,
-		},
-	)
+	config := HTTP_Server_Config {
+		routes         = routes,
+		port           = port,
+		address        = address,
+		multithread    = multithread,
+		maxRequestSize = 4096,
+		logger         = logger,
+	}
+	listen_config(&config)
 }
