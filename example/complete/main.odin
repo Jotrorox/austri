@@ -1,11 +1,11 @@
 package main
 
 import austri "../../"
-import "core:log"
 import fmt "core:fmt"
+import "core:log"
 
 // Handler for serving a simple CSS file at /simple-css
-handle_simple_css :: proc(request: austri.HTTP_Request) {
+handle_simple_css :: proc(request: austri.HTTP_Request_Handle) {
 	austri.send_response(
 		request.conn,
 		austri.HTTP_Response_Code.OK,
@@ -15,7 +15,7 @@ handle_simple_css :: proc(request: austri.HTTP_Request) {
 }
 
 // Handler for serving the main HTML page at /, which links to the CSS
-handle_html :: proc(request: austri.HTTP_Request) {
+handle_html :: proc(request: austri.HTTP_Request_Handle) {
 	austri.send_response(
 		request.conn,
 		austri.HTTP_Response_Code.OK,
@@ -25,7 +25,7 @@ handle_html :: proc(request: austri.HTTP_Request) {
 }
 
 // Handler for serving a plain text response at /index
-handle_index :: proc(request: austri.HTTP_Request) {
+handle_index :: proc(request: austri.HTTP_Request_Handle) {
 	austri.send_response(
 		request.conn,
 		austri.HTTP_Response_Code.OK,
@@ -37,8 +37,8 @@ handle_index :: proc(request: austri.HTTP_Request) {
 // Handler for templated route /user/:id
 // Demonstrates path templating: captures the 'id' segment into request.params["id"]
 // and responds with a personalized message.
-handle_user_id :: proc(request: austri.HTTP_Request) {
-	id, ok := request.params["id"]
+handle_user_id :: proc(request: austri.HTTP_Request_Handle) {
+	id, ok := request.request.params["id"]
 	if !ok {
 		austri.send_response(
 			request.conn,

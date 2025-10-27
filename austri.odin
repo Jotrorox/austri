@@ -1,8 +1,8 @@
-// 
+//
 // Austri - A lightweight HTTP server library for Odin
-// 
+//
 // License: BSD-2-Clause License
-// 
+//
 // Contributors:
 // - Johannes (jotrorox) Müller <mail@jotrorox.com>
 //
@@ -15,19 +15,6 @@ import net "core:net"
 import strings "core:strings"
 import thread "core:thread"
 
-// HTTP request methods as defined in the HTTP/1.1 specification.
-HTTP_Request_Type :: enum {
-	GET,
-	POST,
-	HEAD,
-	PUT,
-	DELETE,
-	CONNECT,
-	OPTIONS,
-	TRACE,
-	PATCH,
-}
-
 // Represents an incoming HTTP request.
 //
 // Fields:
@@ -36,11 +23,17 @@ HTTP_Request_Type :: enum {
 // - path: The requested URI path.
 // - params: Map of route parameters captured from templated routes,
 //           e.g., for route "/user/:id" and path "/user/123", params["id"] = "123".
+HTTP_Request_Handle :: struct {
+	conn:    net.TCP_Socket,
+	request: HTTP_Request,
+}
+
 HTTP_Request :: struct {
-	conn: net.TCP_Socket,
-	type: HTTP_Request_Type,
-	path: string,
-	params: map[string]string,
+	type:    HTTP_Request_Type,
+	path:    string,
+	params:  map[string]string,
+	version: string,
+	headers: map[string]string,
 }
 
 // Defines a route for the HTTP server.
@@ -52,44 +45,8 @@ HTTP_Request :: struct {
 // - type: The HTTP method this route responds to (e.g., GET, POST).
 HTTP_Route :: struct {
 	path:    string,
-	handler: proc(_: HTTP_Request),
+	handler: proc(_: HTTP_Request_Handle),
 	type:    HTTP_Request_Type,
-}
-
-// Matches a request path against a templated route pattern, populating the params map with captured values if matched.
-//
-// Parameters:
-// - pattern: The route pattern with placeholders, e.g., "/user/:id".
-// - path: The actual request path to match, e.g., "/user/123".
-// - params: Pointer to a map where captured parameters will be stored, e.g., params["id"] = "123".
-//
-// Returns: true if the path matches the pattern exactly (including segment count), false otherwise.
-//
-// Notes: Supports only simple path segment parameters prefixed with ":". Does not handle query parameters or wildcards.
-match_route :: proc(pattern: string, path: string, params: ^map[string]string) -> bool {
-	pattern_segments := strings.split(pattern, "/")
-	defer delete(pattern_segments)
-	
-	path_segments := strings.split(path, "/")
-	defer delete(path_segments)
-	
-	if len(pattern_segments) != len(path_segments) {
-		return false
-	}
-	
-	for i in 0..<len(pattern_segments) {
-		pattern_seg := pattern_segments[i]
-		path_seg := path_segments[i]
-		
-		if strings.has_prefix(pattern_seg, ":") {
-			param_name := pattern_seg[1:]
-			params[param_name] = path_seg
-		} else if pattern_seg != path_seg {
-			return false
-		}
-	}
-	
-	return true
 }
 
 // Configuration structure for the HTTP server.
@@ -108,6 +65,19 @@ HTTP_Server_Config :: struct {
 	multithread:    bool,
 	maxRequestSize: int,
 	logger:         log.Logger,
+}
+
+// HTTP request methods as defined in the HTTP/1.1 specification.
+HTTP_Request_Type :: enum {
+	GET,
+	POST,
+	HEAD,
+	PUT,
+	DELETE,
+	CONNECT,
+	OPTIONS,
+	TRACE,
+	PATCH,
 }
 
 // Standard HTTP response status codes as defined in HTTP/1.1 and extensions.
@@ -174,6 +144,79 @@ HTTP_Response_Code :: enum {
 	LOOP_DETECTED, // 508
 	NOT_EXTENDED, // 510
 	NETWORK_AUTH_REQ, // 511
+}
+
+// Common MIME types for HTTP content negotiation and responses.
+HTTP_Content_Type :: enum {
+	TEXT_PLAIN,
+	TEXT_HTML,
+	TEXT_CSS,
+	TEXT_JAVASCRIPT,
+	TEXT_XML,
+	TEXT_CSV,
+	TEXT_MARKDOWN,
+	APPLICATION_JSON,
+	APPLICATION_XML,
+	APPLICATION_PDF,
+	APPLICATION_OCTET_STREAM,
+	APPLICATION_ZIP,
+	APPLICATION_GZIP,
+	APPLICATION_JAVASCRIPT,
+	APPLICATION_WWW_FORM_URLENCODED,
+	IMAGE_JPEG,
+	IMAGE_PNG,
+	IMAGE_GIF,
+	IMAGE_WEBP,
+	IMAGE_SVG,
+	IMAGE_ICON,
+	AUDIO_MPEG,
+	AUDIO_OGG,
+	AUDIO_WAV,
+	AUDIO_WEBM,
+	VIDEO_MP4,
+	VIDEO_OGG,
+	VIDEO_WEBM,
+	MULTIPART_FORM_DATA,
+	FONT_WOFF,
+	FONT_WOFF2,
+	FONT_TTF,
+	FONT_OTF,
+}
+
+// Matches a request path against a templated route pattern, populating the params map with captured values if matched.
+//
+// Parameters:
+// - pattern: The route pattern with placeholders, e.g., "/user/:id".
+// - path: The actual request path to match, e.g., "/user/123".
+// - params: Pointer to a map where captured parameters will be stored, e.g., params["id"] = "123".
+//
+// Returns: true if the path matches the pattern exactly (including segment count), false otherwise.
+//
+// Notes: Supports only simple path segment parameters prefixed with ":". Does not handle query parameters or wildcards.
+match_route :: proc(pattern: string, path: string, params: ^map[string]string) -> bool {
+	pattern_segments := strings.split(pattern, "/")
+	defer delete(pattern_segments)
+
+	path_segments := strings.split(path, "/")
+	defer delete(path_segments)
+
+	if len(pattern_segments) != len(path_segments) {
+		return false
+	}
+
+	for i in 0 ..< len(pattern_segments) {
+		pattern_seg := pattern_segments[i]
+		path_seg := path_segments[i]
+
+		if strings.has_prefix(pattern_seg, ":") {
+			param_name := pattern_seg[1:]
+			params[param_name] = path_seg
+		} else if pattern_seg != path_seg {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Returns the standard string representation of an HTTP response status code (e.g., "200 OK").
@@ -310,43 +353,6 @@ get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
 		return "511 Network Authentication Required"
 	}
 	return "500 Internal Server Error"
-}
-
-// Common MIME types for HTTP content negotiation and responses.
-HTTP_Content_Type :: enum {
-	TEXT_PLAIN,
-	TEXT_HTML,
-	TEXT_CSS,
-	TEXT_JAVASCRIPT,
-	TEXT_XML,
-	TEXT_CSV,
-	TEXT_MARKDOWN,
-	APPLICATION_JSON,
-	APPLICATION_XML,
-	APPLICATION_PDF,
-	APPLICATION_OCTET_STREAM,
-	APPLICATION_ZIP,
-	APPLICATION_GZIP,
-	APPLICATION_JAVASCRIPT,
-	APPLICATION_WWW_FORM_URLENCODED,
-	IMAGE_JPEG,
-	IMAGE_PNG,
-	IMAGE_GIF,
-	IMAGE_WEBP,
-	IMAGE_SVG,
-	IMAGE_ICON,
-	AUDIO_MPEG,
-	AUDIO_OGG,
-	AUDIO_WAV,
-	AUDIO_WEBM,
-	VIDEO_MP4,
-	VIDEO_OGG,
-	VIDEO_WEBM,
-	MULTIPART_FORM_DATA,
-	FONT_WOFF,
-	FONT_WOFF2,
-	FONT_TTF,
-	FONT_OTF,
 }
 
 // Returns the MIME type string for a given HTTP_Content_Type enum value.
@@ -537,30 +543,41 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		req_type = HTTP_Request_Type.TRACE
 	}
 
-	request := HTTP_Request{client, req_type, req_header_split[1], make(map[string]string)}
+	request := HTTP_Request_Handle {
+		client,
+		HTTP_Request {
+			req_type,
+			req_header_split[1],
+			make(map[string]string),
+			req_header_split[0],
+			make(map[string]string),
+		},
+	}
 
 	for route in (server_config^).routes {
-		if !strings.contains(route.path, ":") && route.path == request.path && route.type == request.type {
+		if !strings.contains(route.path, ":") &&
+		   route.path == request.request.path &&
+		   route.type == request.request.type {
 			route.handler(request)
 			return
 		}
 	}
 
 	for route in (server_config^).routes {
-		if strings.contains(route.path, ":") && route.type == request.type {
-			if match_route(route.path, request.path, &request.params) {
+		if strings.contains(route.path, ":") && route.type == request.request.type {
+			if match_route(route.path, request.request.path, &request.request.params) {
 				route.handler(request)
 				return
 			}
 		}
 	}
 
-	delete(request.params)
+	delete(request.request.params)
 	send_response(
 		request.conn,
 		HTTP_Response_Code.NOT_FOUND,
 		strings.concatenate(
-			[]string{"You are requesting: ", request.path, " which doesn't exist :("},
+			[]string{"You are requesting: ", request.request.path, " which doesn't exist :("},
 		),
 		HTTP_Content_Type.TEXT_PLAIN,
 	)
