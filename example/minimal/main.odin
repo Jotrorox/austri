@@ -1,6 +1,6 @@
 package main
 
-import austri "../../"
+import austri "../../austri"
 import "core:log"
 
 handle_index :: proc(request: austri.HTTP_Request_Handle) {

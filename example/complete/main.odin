@@ -1,6 +1,6 @@
 package main
 
-import austri "../../"
+import austri "../../austri"
 import fmt "core:fmt"
 import "core:log"
 
