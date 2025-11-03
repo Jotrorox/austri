@@ -28,6 +28,14 @@ HTTP_Request_Handle :: struct {
 	request: HTTP_Request,
 }
 
+// Represents a parsed HTTP request.
+//
+// Fields:
+// - type: The HTTP method of the request (e.g., GET, POST).
+// - path: The requested URI path.
+// - params: Map of route parameters captured from templated routes.
+// - version: The HTTP version string from the request line (e.g., "HTTP/1.1").
+// - headers: Map of HTTP headers from the request.
 HTTP_Request :: struct {
 	type:    HTTP_Request_Type,
 	path:    string,
