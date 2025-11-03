@@ -9,6 +9,7 @@
 
 package austri
 
+import "core:testing"
 import fmt "core:fmt"
 import log "core:log"
 import net "core:net"
@@ -227,6 +228,21 @@ match_route :: proc(pattern: string, path: string, params: ^map[string]string) -
 	return true
 }
 
+@(test)
+test_match_route :: proc(t: ^testing.T) {
+	params := make(map[string]string)
+	defer delete(params)
+
+	pattern := "/user/:id/profile/:section"
+	path := "/user/123/profile/settings"
+
+	matched := match_route(pattern, path, &params)
+	testing.expect(t, matched, "Expected route to match")
+
+	testing.expect(t, params["id"] == "123", "Expected id param to be '123'")
+	testing.expect(t, params["section"] == "settings", "Expected section param to be 'settings'")
+}
+
 // Returns the standard string representation of an HTTP response status code (e.g., "200 OK").
 //
 // Parameters:
@@ -363,6 +379,21 @@ get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
 	return "500 Internal Server Error"
 }
 
+@(test)
+test_get_response_code_string :: proc(t: ^testing.T) {
+	result := get_response_code_string(HTTP_Response_Code.OK)
+	testing.expect(t, result == "200 OK", "Expected response code string to be '200 OK'")
+
+	result = get_response_code_string(HTTP_Response_Code.NOT_FOUND)
+	testing.expect(t, result == "404 Not Found", "Expected response code string to be '404 Not Found'")
+
+	result = get_response_code_string(HTTP_Response_Code.SERVER_ERROR)
+	testing.expect(t, result == "500 Internal Server Error", "Expected response code string to be '500 Internal Server Error'")
+
+	result = get_response_code_string(HTTP_Response_Code(999))
+	testing.expect(t, result == "500 Internal Server Error", "Expected unknown response code to return '500 Internal Server Error'")
+}
+
 // Returns the MIME type string for a given HTTP_Content_Type enum value.
 //
 // Parameters:
@@ -439,6 +470,18 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 		return "font/otf"
 	}
 	return "text/plain"
+}
+
+@(test)
+test_get_content_type_string :: proc(t: ^testing.T) {
+	result := get_content_type_string(HTTP_Content_Type.APPLICATION_JSON)
+	testing.expect(t, result == "application/json", "Expected content type string to be 'application/json'")
+	
+	result = get_content_type_string(HTTP_Content_Type.IMAGE_PNG)
+	testing.expect(t, result == "image/png", "Expected content type string to be 'image/png'")
+	
+	result = get_content_type_string(HTTP_Content_Type(999))
+	testing.expect(t, result == "text/plain", "Expected unknown content type to return 'text/plain'")
 }
 
 // Sends a basic HTTP/1.1 response to the client socket.

@@ -1,0 +1,22 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run odin tests
+        run: odin test austri
