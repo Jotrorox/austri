@@ -192,6 +192,32 @@ HTTP_Content_Type :: enum {
 	FONT_OTF,
 }
 
+// Parses an HTTP method string into an HTTP_Request_Type enum value.
+// Returns the type and true if supported, or .GET (default) and false if unsupported.
+parse_http_method :: proc(method: string) -> (HTTP_Request_Type, bool) {
+	switch method {
+	case "GET":
+		return HTTP_Request_Type.GET, true
+	case "POST":
+		return HTTP_Request_Type.POST, true
+	case "PUT":
+		return HTTP_Request_Type.PUT, true
+	case "PATCH":
+		return HTTP_Request_Type.PATCH, true
+	case "CONNECT":
+		return HTTP_Request_Type.CONNECT, true
+	case "DELETE":
+		return HTTP_Request_Type.DELETE, true
+	case "HEAD":
+		return HTTP_Request_Type.HEAD, true
+	case "OPTIONS":
+		return HTTP_Request_Type.OPTIONS, true
+	case "TRACE":
+		return HTTP_Request_Type.TRACE, true
+	}
+	return HTTP_Request_Type.GET, false
+}
+
 // Matches a request path against a templated route pattern, populating the params map with captured values if matched.
 //
 // Parameters:
@@ -546,7 +572,7 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		return
 	}
 
-	raw_request := string(buffer[:bytes_read])
+	raw_request, allocation := strings.replace(string(buffer[:bytes_read]), "\r", "", -1)
 	req_split, req_split_err := strings.split(raw_request, "\n")
 	if req_split_err != nil {
 		log.warn("Error splitting the request by lines: ", req_split_err)
@@ -561,7 +587,7 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 	log.info("Recieved request: ", req_split[0])
 
 	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
-	if req_header_split_err != nil || len(req_header_split) < 2 {
+	if req_header_split_err != nil || len(req_header_split) < 3 {
 		log.warn("Error splitting the request Header: ", req_header_split_err)
 		send_response(
 			client,
@@ -572,63 +598,54 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		return
 	}
 
-	req_type: HTTP_Request_Type
-	switch req_header_split[0] {
-	case "GET":
-		req_type = HTTP_Request_Type.GET
-	case "POST":
-		req_type = HTTP_Request_Type.POST
-	case "PUT":
-		req_type = HTTP_Request_Type.PUT
-	case "PATCH":
-		req_type = HTTP_Request_Type.PATCH
-	case "CONNECT":
-		req_type = HTTP_Request_Type.CONNECT
-	case "DELETE":
-		req_type = HTTP_Request_Type.DELETE
-	case "HEAD":
-		req_type = HTTP_Request_Type.HEAD
-	case "OPTIONS":
-		req_type = HTTP_Request_Type.OPTIONS
-	case "TRACE":
-		req_type = HTTP_Request_Type.TRACE
+	req_type, supported := parse_http_method(req_header_split[0])
+	if !supported {
+		log.warn("Unsupported HTTP method: ", req_header_split[0])
+		send_response(
+			client,
+			HTTP_Response_Code.METHOD_NOT_ALLOWED,
+			"HTTP method not supported",
+			HTTP_Content_Type.TEXT_PLAIN,
+		)
+		return
 	}
 
-	request := HTTP_Request_Handle {
+	request_handle := HTTP_Request_Handle {
 		client,
 		HTTP_Request {
 			req_type,
 			req_header_split[1],
 			make(map[string]string),
-			req_header_split[0],
+			req_header_split[2],
 			make(map[string]string),
 		},
 	}
+	defer delete(request_handle.request.params)
+	defer delete(request_handle.request.headers)
 
 	for route in (server_config^).routes {
 		if !strings.contains(route.path, ":") &&
-		   route.path == request.request.path &&
-		   route.type == request.request.type {
-			route.handler(request)
+		   route.path == request_handle.request.path &&
+		   route.type == request_handle.request.type {
+			route.handler(request_handle)
 			return
 		}
 	}
 
 	for route in (server_config^).routes {
-		if strings.contains(route.path, ":") && route.type == request.request.type {
-			if match_route(route.path, request.request.path, &request.request.params) {
-				route.handler(request)
+		if strings.contains(route.path, ":") && route.type == request_handle.request.type {
+			if match_route(route.path, request_handle.request.path, &request_handle.request.params) {
+				route.handler(request_handle)
 				return
 			}
 		}
 	}
 
-	delete(request.request.params)
 	send_response(
-		request.conn,
+		request_handle.conn,
 		HTTP_Response_Code.NOT_FOUND,
 		strings.concatenate(
-			[]string{"You are requesting: ", request.request.path, " which doesn't exist :("},
+			[]string{"You are requesting: ", request_handle.request.path, " which doesn't exist :("},
 		),
 		HTTP_Content_Type.TEXT_PLAIN,
 	)
