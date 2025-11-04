@@ -192,6 +192,15 @@ HTTP_Content_Type :: enum {
 	FONT_OTF,
 }
 
+// Error codes for HTTP request parsing.
+HTTP_Parse_Error :: enum {
+	NONE,
+	READ_ERROR,
+	SPLIT_ERROR,
+	HEADER_ERROR,
+	UNSUPPORTED_METHOD,
+}
+
 // Parses an HTTP method string into an HTTP_Request_Type enum value.
 // Returns the type and true if supported, or .GET (default) and false if unsupported.
 parse_http_method :: proc(method: string) -> (HTTP_Request_Type, bool) {
@@ -216,6 +225,20 @@ parse_http_method :: proc(method: string) -> (HTTP_Request_Type, bool) {
 		return HTTP_Request_Type.TRACE, true
 	}
 	return HTTP_Request_Type.GET, false
+}
+
+@(test)
+test_parse_http_method :: proc(t: ^testing.T) {
+	method, supported := parse_http_method("GET")
+	testing.expect(t, supported, "Expected method to be supported")
+	testing.expect(t, method == HTTP_Request_Type.GET, "Expected method to be GET")
+
+	method, supported = parse_http_method("POST")
+	testing.expect(t, supported, "Expected method to be supported")
+	testing.expect(t, method == HTTP_Request_Type.POST, "Expected method to be POST")
+
+	method, supported = parse_http_method("INVALID")
+	testing.expect(t, !supported, "Expected method to be unsupported")
 }
 
 // Matches a request path against a templated route pattern, populating the params map with captured values if matched.
@@ -546,6 +569,77 @@ send_response :: proc(
 	net.send(client, transmute([]u8)response)
 }
 
+// Parses an HTTP request from raw bytes and returns an HTTP_Request_Handle and error code.
+//
+// Parameters:
+// - buffer: The raw request data.
+// - bytes_read: The number of bytes read from the client socket.
+//
+// Returns: A tuple of (HTTP_Request_Handle, HTTP_Parse_Error) where the error code indicates status.
+//          HTTP_Parse_Error.NONE indicates success, otherwise the parsing failed.
+parse_http_request :: proc(
+	buffer: []byte,
+	bytes_read: int,
+) -> (HTTP_Request_Handle, HTTP_Parse_Error) {
+	raw_request, _ := strings.replace(string(buffer[:bytes_read]), "\r", "", -1)
+	req_split, req_split_err := strings.split(raw_request, "\n")
+	if req_split_err != nil {
+		log.warn("Error splitting the request by lines: ", req_split_err)
+		return HTTP_Request_Handle{}, HTTP_Parse_Error.SPLIT_ERROR
+	}
+	log.info("Recieved request: ", req_split[0])
+
+	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
+	if req_header_split_err != nil || len(req_header_split) < 3 {
+		log.warn("Error splitting the request Header: ", req_header_split_err)
+		return HTTP_Request_Handle{}, HTTP_Parse_Error.HEADER_ERROR
+	}
+
+	req_type, supported := parse_http_method(req_header_split[0])
+	if !supported {
+		log.warn("Unsupported HTTP method: ", req_header_split[0])
+		return HTTP_Request_Handle{}, HTTP_Parse_Error.UNSUPPORTED_METHOD
+	}
+
+	request_handle := HTTP_Request_Handle {
+		net.TCP_Socket{},
+		HTTP_Request {
+			req_type,
+			req_header_split[1],
+			make(map[string]string),
+			req_header_split[2],
+			make(map[string]string),
+		},
+	}
+
+	return request_handle, HTTP_Parse_Error.NONE
+}
+
+@(test)
+test_parse_http_request :: proc(t: ^testing.T) {
+	raw_request := "GET /hello/world HTTP/1.1\r\nHost: localhost\r\nUser-Agent: TestClient\r\n\r\n"
+	buffer := transmute([]byte)raw_request
+	request_handle, parse_err := parse_http_request(buffer, len(buffer))
+	testing.expect(t, parse_err == HTTP_Parse_Error.NONE, "Expected no parse error")
+	testing.expect(t, request_handle.request.type == HTTP_Request_Type.GET, "Expected request type to be GET")
+	testing.expect(t, request_handle.request.path == "/hello/world", "Expected request path to be '/hello/world'")
+	testing.expect(t, request_handle.request.version == "HTTP/1.1", "Expected request version to be 'HTTP/1.1'")
+
+	// clean up allocations from parse
+	delete(request_handle.request.params)
+	delete(request_handle.request.headers)
+
+	raw_request = "INVALID /hello/world HTTP/1.1\r\nHost: localhost\r\n\r\n"
+	buffer = transmute([]byte)raw_request
+	_, parse_err = parse_http_request(buffer, len(buffer))
+	testing.expect(t, parse_err == HTTP_Parse_Error.UNSUPPORTED_METHOD, "Expected unsupported method error")
+	
+	raw_request = "GET /hello/world\r\nHost: localhost\r\n\r\n"
+	buffer = transmute([]byte)raw_request
+	_, parse_err = parse_http_request(buffer, len(buffer))
+	testing.expect(t, parse_err == HTTP_Parse_Error.HEADER_ERROR, "Expected header error")
+}
+
 // Processes an incoming client request: parses headers, matches routes, and invokes the handler or sends error response.
 //
 // Parameters:
@@ -572,54 +666,47 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		return
 	}
 
-	raw_request, allocation := strings.replace(string(buffer[:bytes_read]), "\r", "", -1)
-	req_split, req_split_err := strings.split(raw_request, "\n")
-	if req_split_err != nil {
-		log.warn("Error splitting the request by lines: ", req_split_err)
-		send_response(
-			client,
-			HTTP_Response_Code.BAD_REQUEST,
-			"Invalid request format",
-			HTTP_Content_Type.TEXT_PLAIN,
-		)
+	request_handle, parse_err := parse_http_request(buffer[:], bytes_read)
+	if parse_err != HTTP_Parse_Error.NONE {
+		request_handle.conn = client
+		switch parse_err {
+		case .SPLIT_ERROR:
+			send_response(
+				client,
+				HTTP_Response_Code.BAD_REQUEST,
+				"Invalid request format",
+				HTTP_Content_Type.TEXT_PLAIN,
+			)
+		case .HEADER_ERROR:
+			send_response(
+				client,
+				HTTP_Response_Code.BAD_REQUEST,
+				"Invalid request header",
+				HTTP_Content_Type.TEXT_PLAIN,
+			)
+		case .UNSUPPORTED_METHOD:
+			send_response(
+				client,
+				HTTP_Response_Code.METHOD_NOT_ALLOWED,
+				"HTTP method not supported",
+				HTTP_Content_Type.TEXT_PLAIN,
+			)
+		case .READ_ERROR:
+			send_response(
+				client,
+				HTTP_Response_Code.BAD_REQUEST,
+				"Error reading request",
+				HTTP_Content_Type.TEXT_PLAIN,
+			)
+		case .NONE:
+			// This shouldn't happen, but handle it anyway
+		}
+		delete(request_handle.request.params)
+		delete(request_handle.request.headers)
 		return
 	}
-	log.info("Recieved request: ", req_split[0])
 
-	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
-	if req_header_split_err != nil || len(req_header_split) < 3 {
-		log.warn("Error splitting the request Header: ", req_header_split_err)
-		send_response(
-			client,
-			HTTP_Response_Code.BAD_REQUEST,
-			"Invalid request header",
-			HTTP_Content_Type.TEXT_PLAIN,
-		)
-		return
-	}
-
-	req_type, supported := parse_http_method(req_header_split[0])
-	if !supported {
-		log.warn("Unsupported HTTP method: ", req_header_split[0])
-		send_response(
-			client,
-			HTTP_Response_Code.METHOD_NOT_ALLOWED,
-			"HTTP method not supported",
-			HTTP_Content_Type.TEXT_PLAIN,
-		)
-		return
-	}
-
-	request_handle := HTTP_Request_Handle {
-		client,
-		HTTP_Request {
-			req_type,
-			req_header_split[1],
-			make(map[string]string),
-			req_header_split[2],
-			make(map[string]string),
-		},
-	}
+	request_handle.conn = client
 	defer delete(request_handle.request.params)
 	defer delete(request_handle.request.headers)
 
