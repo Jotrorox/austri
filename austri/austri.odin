@@ -37,12 +37,14 @@ HTTP_Request_Handle :: struct {
 // - params: Map of route parameters captured from templated routes.
 // - version: The HTTP version string from the request line (e.g., "HTTP/1.1").
 // - headers: Map of HTTP headers from the request.
+// - body: The request body content as a string.
 HTTP_Request :: struct {
 	type:    HTTP_Request_Type,
 	path:    string,
 	params:  map[string]string,
 	version: string,
 	headers: map[string]string,
+	body:    string,
 }
 
 // Defines a route for the HTTP server.
@@ -581,15 +583,25 @@ parse_http_request :: proc(
 	buffer: []byte,
 	bytes_read: int,
 ) -> (HTTP_Request_Handle, HTTP_Parse_Error) {
-	raw_request, _ := strings.replace(string(buffer[:bytes_read]), "\r", "", -1)
-	req_split, req_split_err := strings.split(raw_request, "\n")
+	raw_request := string(buffer[:bytes_read])
+	
+	req_split, req_split_err := strings.split(raw_request, "\r\n")
 	if req_split_err != nil {
 		log.warn("Error splitting the request by lines: ", req_split_err)
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.SPLIT_ERROR
 	}
-	log.info("Recieved request: ", req_split[0])
+	defer delete(req_split)
+	
+	if len(req_split) == 0 {
+		log.warn("Empty request")
+		return HTTP_Request_Handle{}, HTTP_Parse_Error.HEADER_ERROR
+	}
+	
+	log.info("Received request: ", req_split[0])
 
 	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
+	defer delete(req_header_split)
+	
 	if req_header_split_err != nil || len(req_header_split) < 3 {
 		log.warn("Error splitting the request Header: ", req_header_split_err)
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.HEADER_ERROR
@@ -601,14 +613,111 @@ parse_http_request :: proc(
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.UNSUPPORTED_METHOD
 	}
 
+	// Parse headers
+	headers := make(map[string]string)
+	header_end_index := 1
+	for i := 1; i < len(req_split); i += 1 {
+		line := req_split[i]
+		if len(line) == 0 {
+			header_end_index = i
+			break
+		}
+		
+		colon_index := strings.index(line, ":")
+		if colon_index == -1 {
+			continue
+		}
+		
+		header_name := strings.trim_space(line[:colon_index])
+		header_value := strings.trim_space(line[colon_index + 1:])
+		
+		header_name_lower := strings.to_lower(header_name)
+		defer delete(header_name_lower)
+		headers[strings.clone(header_name_lower)] = strings.clone(header_value)
+	}
+	
+	body := ""
+	
+	// Check for Content-Length header
+	content_length_str, has_content_length := headers["content-length"]
+	if has_content_length {
+		content_length := 0
+		for c in content_length_str {
+			if c >= '0' && c <= '9' {
+				content_length = content_length * 10 + int(c - '0')
+			}
+		}
+		
+		if content_length > 0 {
+			body_start_index := header_end_index + 1
+			if body_start_index < len(req_split) {
+				body_lines := req_split[body_start_index:]
+				body_joined := strings.join(body_lines, "\r\n")
+				defer delete(body_joined)
+				
+				if len(body_joined) > content_length {
+					body = strings.clone(body_joined[:content_length])
+				} else {
+					body = strings.clone(body_joined)
+				}
+			}
+		}
+	}
+	
+	// Check for Transfer-Encoding: chunked
+	transfer_encoding, has_transfer_encoding := headers["transfer-encoding"]
+	if has_transfer_encoding && strings.contains(strings.to_lower(transfer_encoding), "chunked") {
+		body_start_index := header_end_index + 1
+		if body_start_index < len(req_split) {
+			chunk_lines := req_split[body_start_index:]
+			body_builder := strings.builder_make()
+			defer strings.builder_destroy(&body_builder)
+			
+			i := 0
+			for i < len(chunk_lines) {
+				chunk_size_str := chunk_lines[i]
+				chunk_size := 0
+				
+				for c in chunk_size_str {
+					if c >= '0' && c <= '9' {
+						chunk_size = chunk_size * 16 + int(c - '0')
+					} else if c >= 'a' && c <= 'f' {
+						chunk_size = chunk_size * 16 + int(c - 'a' + 10)
+					} else if c >= 'A' && c <= 'F' {
+						chunk_size = chunk_size * 16 + int(c - 'A' + 10)
+					} else {
+						break
+					}
+				}
+				
+				if chunk_size == 0 {
+					break
+				}
+				
+				i += 1
+				if i < len(chunk_lines) {
+					chunk_data := chunk_lines[i]
+					if len(chunk_data) > chunk_size {
+						chunk_data = chunk_data[:chunk_size]
+					}
+					strings.write_string(&body_builder, chunk_data)
+					i += 1
+				}
+			}
+			
+			body = strings.clone(strings.to_string(body_builder))
+		}
+	}
+
 	request_handle := HTTP_Request_Handle {
 		net.TCP_Socket{},
 		HTTP_Request {
 			req_type,
-			req_header_split[1],
+			strings.clone(req_header_split[1]),
 			make(map[string]string),
-			req_header_split[2],
-			make(map[string]string),
+			strings.clone(req_header_split[2]),
+			headers,
+			body,
 		},
 	}
 
@@ -624,9 +733,48 @@ test_parse_http_request :: proc(t: ^testing.T) {
 	testing.expect(t, request_handle.request.type == HTTP_Request_Type.GET, "Expected request type to be GET")
 	testing.expect(t, request_handle.request.path == "/hello/world", "Expected request path to be '/hello/world'")
 	testing.expect(t, request_handle.request.version == "HTTP/1.1", "Expected request version to be 'HTTP/1.1'")
+	
+	// Test header parsing
+	host_header, has_host := request_handle.request.headers["host"]
+	testing.expect(t, has_host, "Expected Host header to be present")
+	testing.expect(t, host_header == "localhost", "Expected Host header to be 'localhost'")
+	
+	user_agent, has_ua := request_handle.request.headers["user-agent"]
+	testing.expect(t, has_ua, "Expected User-Agent header to be present")
+	testing.expect(t, user_agent == "TestClient", "Expected User-Agent header to be 'TestClient'")
 
 	// clean up allocations from parse
+	delete(request_handle.request.path)
+	delete(request_handle.request.version)
+	delete(request_handle.request.body)
 	delete(request_handle.request.params)
+	for key, value in request_handle.request.headers {
+		delete(key)
+		delete(value)
+	}
+	delete(request_handle.request.headers)
+
+	// Test POST request with body
+	post_request := "POST /api/data HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"message\":\"Hello, World!\"}"
+	buffer = transmute([]byte)post_request
+	request_handle, parse_err = parse_http_request(buffer, len(buffer))
+	testing.expect(t, parse_err == HTTP_Parse_Error.NONE, "Expected no parse error for POST")
+	testing.expect(t, request_handle.request.type == HTTP_Request_Type.POST, "Expected request type to be POST")
+	testing.expect(t, request_handle.request.body == "{\"message\":\"Hello, World!\"}", "Expected body to be parsed correctly")
+	
+	content_type, has_ct := request_handle.request.headers["content-type"]
+	testing.expect(t, has_ct, "Expected Content-Type header to be present")
+	testing.expect(t, content_type == "application/json", "Expected Content-Type to be 'application/json'")
+	
+	// clean up allocations by the parsing
+	delete(request_handle.request.path)
+	delete(request_handle.request.version)
+	delete(request_handle.request.body)
+	delete(request_handle.request.params)
+	for key, value in request_handle.request.headers {
+		delete(key)
+		delete(value)
+	}
 	delete(request_handle.request.headers)
 
 	raw_request = "INVALID /hello/world HTTP/1.1\r\nHost: localhost\r\n\r\n"
@@ -698,17 +846,34 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 				"Error reading request",
 				HTTP_Content_Type.TEXT_PLAIN,
 			)
-		case .NONE:
-			// This shouldn't happen, but handle it anyway
+		case .NONE: // shouldn't happen
 		}
+
+		// clean up things from parsing
+		delete(request_handle.request.path)
+		delete(request_handle.request.version)
+		delete(request_handle.request.body)
 		delete(request_handle.request.params)
+		for key, value in request_handle.request.headers {
+			delete(key)
+			delete(value)
+		}
 		delete(request_handle.request.headers)
 		return
 	}
 
 	request_handle.conn = client
-	defer delete(request_handle.request.params)
-	defer delete(request_handle.request.headers)
+	defer {
+		delete(request_handle.request.path)
+		delete(request_handle.request.version)
+		delete(request_handle.request.body)
+		delete(request_handle.request.params)
+		for key, value in request_handle.request.headers {
+			delete(key)
+			delete(value)
+		}
+		delete(request_handle.request.headers)
+	}
 
 	for route in (server_config^).routes {
 		if !strings.contains(route.path, ":") &&
