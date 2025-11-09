@@ -1,7 +1,6 @@
 package main
 
 import austri "../../austri"
-import "core:log"
 
 handle_index :: proc(request: austri.HTTP_Request_Handle) {
 	austri.send_response(
@@ -15,5 +14,5 @@ handle_index :: proc(request: austri.HTTP_Request_Handle) {
 main :: proc() {
 	routes := []austri.HTTP_Route{{path = "/", handler = handle_index, type = .GET}}
 
-	austri.listen(routes, 8080, logger = log.create_console_logger(.Info))
+	austri.listen(routes, 8080)
 }

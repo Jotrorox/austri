@@ -551,7 +551,6 @@ send_response :: proc(
 	content_type: HTTP_Content_Type = HTTP_Content_Type.TEXT_PLAIN,
 ) {
 	content_length := len(body)
-
 	response := strings.concatenate(
 		[]string {
 			"HTTP/1.1 ",
@@ -567,7 +566,7 @@ send_response :: proc(
 			body,
 		},
 	)
-
+	defer delete(response)
 	net.send(client, transmute([]u8)response)
 }
 
@@ -903,9 +902,11 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 	)
 }
 
+// Grouped procedure for starting the HTTP server and listening for connections.
 listen :: proc {
 	listen_config,
 	listen_values,
+	listen_simple,
 }
 
 // Listens for incoming TCP connections and dispatches them to handlers in a loop.
@@ -956,22 +957,49 @@ listen_config :: proc(server_config: ^HTTP_Server_Config) {
 // - address: The IP address (default: net.IP4_Loopback / 127.0.0.1).
 // - multithread: Enable threaded client handling (default: true).
 // - logger: The log.Logger for server output.
-//
-// Notes: Sets maxRequestSize to 4096 bytes. Calls listen_config with the built config.
-//        Use this for quick server setup without manually creating HTTP_Server_Config.
+// - maxRequestSize: Maximum request size in bytes (default: 4096).
 listen_values :: proc(
 	routes: []HTTP_Route,
 	port: int,
 	address: net.Address = net.IP4_Loopback,
 	multithread: bool = true,
 	logger: log.Logger,
+	maxRequestSize: int = 4096,
 ) {
 	config := HTTP_Server_Config {
 		routes         = routes,
 		port           = port,
 		address        = address,
 		multithread    = multithread,
-		maxRequestSize = 4096,
+		maxRequestSize = maxRequestSize,
+		logger         = logger,
+	}
+	listen_config(&config)
+}
+
+// Convenience procedure to start the server with explicit values, constructing config internally.
+// This version uses the standard logger to console to make simple servers have less boilerplate.
+//
+// Parameters:
+// - routes: Slice of HTTP_Route to handle requests.
+// - port: The port number to bind to.
+// - address: The IP address (default: net.IP4_Loopback / 127.0.0.1).
+// - multithread: Enable threaded client handling (default: true).
+// - maxRequestSize: Maximum request size in bytes (default: 4096).
+listen_simple :: proc(
+	routes: []HTTP_Route,
+	port: int,
+	address: net.Address = net.IP4_Loopback,
+	multithread: bool = true,
+	maxRequestSize: int = 4096,
+) {
+	logger := log.create_console_logger(log.Level.Debug)
+	config := HTTP_Server_Config {
+		routes         = routes,
+		port           = port,
+		address        = address,
+		multithread    = multithread,
+		maxRequestSize = maxRequestSize,
 		logger         = logger,
 	}
 	listen_config(&config)
