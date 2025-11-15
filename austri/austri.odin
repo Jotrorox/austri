@@ -9,11 +9,11 @@
 
 package austri
 
-import "core:testing"
 import fmt "core:fmt"
 import log "core:log"
 import net "core:net"
 import strings "core:strings"
+import "core:testing"
 import thread "core:thread"
 
 // Represents an incoming HTTP request.
@@ -195,6 +195,7 @@ HTTP_Content_Type :: enum {
 }
 
 // Error codes for HTTP request parsing.
+@(private)
 HTTP_Parse_Error :: enum {
 	NONE,
 	READ_ERROR,
@@ -205,6 +206,7 @@ HTTP_Parse_Error :: enum {
 
 // Parses an HTTP method string into an HTTP_Request_Type enum value.
 // Returns the type and true if supported, or .GET (default) and false if unsupported.
+@(private)
 parse_http_method :: proc(method: string) -> (HTTP_Request_Type, bool) {
 	switch method {
 	case "GET":
@@ -253,6 +255,7 @@ test_parse_http_method :: proc(t: ^testing.T) {
 // Returns: true if the path matches the pattern exactly (including segment count), false otherwise.
 //
 // Notes: Supports only simple path segment parameters prefixed with ":". Does not handle query parameters or wildcards.
+@(private)
 match_route :: proc(pattern: string, path: string, params: ^map[string]string) -> bool {
 	pattern_segments := strings.split(pattern, "/")
 	defer delete(pattern_segments)
@@ -300,6 +303,7 @@ test_match_route :: proc(t: ^testing.T) {
 // - code: The HTTP_Response_Code enum value to convert.
 //
 // Returns: The status line string, or "500 Internal Server Error" for unrecognized codes.
+@(private)
 get_response_code_string :: proc(code: HTTP_Response_Code) -> string {
 	switch code {
 	case .CONTINUE:
@@ -436,13 +440,25 @@ test_get_response_code_string :: proc(t: ^testing.T) {
 	testing.expect(t, result == "200 OK", "Expected response code string to be '200 OK'")
 
 	result = get_response_code_string(HTTP_Response_Code.NOT_FOUND)
-	testing.expect(t, result == "404 Not Found", "Expected response code string to be '404 Not Found'")
+	testing.expect(
+		t,
+		result == "404 Not Found",
+		"Expected response code string to be '404 Not Found'",
+	)
 
 	result = get_response_code_string(HTTP_Response_Code.SERVER_ERROR)
-	testing.expect(t, result == "500 Internal Server Error", "Expected response code string to be '500 Internal Server Error'")
+	testing.expect(
+		t,
+		result == "500 Internal Server Error",
+		"Expected response code string to be '500 Internal Server Error'",
+	)
 
 	result = get_response_code_string(HTTP_Response_Code(999))
-	testing.expect(t, result == "500 Internal Server Error", "Expected unknown response code to return '500 Internal Server Error'")
+	testing.expect(
+		t,
+		result == "500 Internal Server Error",
+		"Expected unknown response code to return '500 Internal Server Error'",
+	)
 }
 
 // Returns the MIME type string for a given HTTP_Content_Type enum value.
@@ -451,6 +467,7 @@ test_get_response_code_string :: proc(t: ^testing.T) {
 // - code: The HTTP_Content_Type enum value.
 //
 // Returns: The corresponding MIME type string, or "text/plain" for unrecognized types.
+@(private)
 get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 	switch code {
 	case .TEXT_PLAIN:
@@ -526,13 +543,21 @@ get_content_type_string :: proc(code: HTTP_Content_Type) -> string {
 @(test)
 test_get_content_type_string :: proc(t: ^testing.T) {
 	result := get_content_type_string(HTTP_Content_Type.APPLICATION_JSON)
-	testing.expect(t, result == "application/json", "Expected content type string to be 'application/json'")
-	
+	testing.expect(
+		t,
+		result == "application/json",
+		"Expected content type string to be 'application/json'",
+	)
+
 	result = get_content_type_string(HTTP_Content_Type.IMAGE_PNG)
 	testing.expect(t, result == "image/png", "Expected content type string to be 'image/png'")
-	
+
 	result = get_content_type_string(HTTP_Content_Type(999))
-	testing.expect(t, result == "text/plain", "Expected unknown content type to return 'text/plain'")
+	testing.expect(
+		t,
+		result == "text/plain",
+		"Expected unknown content type to return 'text/plain'",
+	)
 }
 
 // Sends a basic HTTP/1.1 response to the client socket.
@@ -578,29 +603,33 @@ send_response :: proc(
 //
 // Returns: A tuple of (HTTP_Request_Handle, HTTP_Parse_Error) where the error code indicates status.
 //          HTTP_Parse_Error.NONE indicates success, otherwise the parsing failed.
+@(private)
 parse_http_request :: proc(
 	buffer: []byte,
 	bytes_read: int,
-) -> (HTTP_Request_Handle, HTTP_Parse_Error) {
+) -> (
+	HTTP_Request_Handle,
+	HTTP_Parse_Error,
+) {
 	raw_request := string(buffer[:bytes_read])
-	
+
 	req_split, req_split_err := strings.split(raw_request, "\r\n")
 	if req_split_err != nil {
 		log.warn("Error splitting the request by lines: ", req_split_err)
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.SPLIT_ERROR
 	}
 	defer delete(req_split)
-	
+
 	if len(req_split) == 0 {
 		log.warn("Empty request")
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.HEADER_ERROR
 	}
-	
+
 	log.info("Received request: ", req_split[0])
 
 	req_header_split, req_header_split_err := strings.split(req_split[0], " ")
 	defer delete(req_header_split)
-	
+
 	if req_header_split_err != nil || len(req_header_split) < 3 {
 		log.warn("Error splitting the request Header: ", req_header_split_err)
 		return HTTP_Request_Handle{}, HTTP_Parse_Error.HEADER_ERROR
@@ -621,22 +650,22 @@ parse_http_request :: proc(
 			header_end_index = i
 			break
 		}
-		
+
 		colon_index := strings.index(line, ":")
 		if colon_index == -1 {
 			continue
 		}
-		
+
 		header_name := strings.trim_space(line[:colon_index])
 		header_value := strings.trim_space(line[colon_index + 1:])
-		
+
 		header_name_lower := strings.to_lower(header_name)
 		defer delete(header_name_lower)
 		headers[strings.clone(header_name_lower)] = strings.clone(header_value)
 	}
-	
+
 	body := ""
-	
+
 	// Check for Content-Length header
 	content_length_str, has_content_length := headers["content-length"]
 	if has_content_length {
@@ -646,14 +675,14 @@ parse_http_request :: proc(
 				content_length = content_length * 10 + int(c - '0')
 			}
 		}
-		
+
 		if content_length > 0 {
 			body_start_index := header_end_index + 1
 			if body_start_index < len(req_split) {
 				body_lines := req_split[body_start_index:]
 				body_joined := strings.join(body_lines, "\r\n")
 				defer delete(body_joined)
-				
+
 				if len(body_joined) > content_length {
 					body = strings.clone(body_joined[:content_length])
 				} else {
@@ -662,7 +691,7 @@ parse_http_request :: proc(
 			}
 		}
 	}
-	
+
 	// Check for Transfer-Encoding: chunked
 	transfer_encoding, has_transfer_encoding := headers["transfer-encoding"]
 	if has_transfer_encoding && strings.contains(strings.to_lower(transfer_encoding), "chunked") {
@@ -671,12 +700,12 @@ parse_http_request :: proc(
 			chunk_lines := req_split[body_start_index:]
 			body_builder := strings.builder_make()
 			defer strings.builder_destroy(&body_builder)
-			
+
 			i := 0
 			for i < len(chunk_lines) {
 				chunk_size_str := chunk_lines[i]
 				chunk_size := 0
-				
+
 				for c in chunk_size_str {
 					if c >= '0' && c <= '9' {
 						chunk_size = chunk_size * 16 + int(c - '0')
@@ -688,11 +717,11 @@ parse_http_request :: proc(
 						break
 					}
 				}
-				
+
 				if chunk_size == 0 {
 					break
 				}
-				
+
 				i += 1
 				if i < len(chunk_lines) {
 					chunk_data := chunk_lines[i]
@@ -703,7 +732,7 @@ parse_http_request :: proc(
 					i += 1
 				}
 			}
-			
+
 			body = strings.clone(strings.to_string(body_builder))
 		}
 	}
@@ -729,15 +758,27 @@ test_parse_http_request :: proc(t: ^testing.T) {
 	buffer := transmute([]byte)raw_request
 	request_handle, parse_err := parse_http_request(buffer, len(buffer))
 	testing.expect(t, parse_err == HTTP_Parse_Error.NONE, "Expected no parse error")
-	testing.expect(t, request_handle.request.type == HTTP_Request_Type.GET, "Expected request type to be GET")
-	testing.expect(t, request_handle.request.path == "/hello/world", "Expected request path to be '/hello/world'")
-	testing.expect(t, request_handle.request.version == "HTTP/1.1", "Expected request version to be 'HTTP/1.1'")
-	
+	testing.expect(
+		t,
+		request_handle.request.type == HTTP_Request_Type.GET,
+		"Expected request type to be GET",
+	)
+	testing.expect(
+		t,
+		request_handle.request.path == "/hello/world",
+		"Expected request path to be '/hello/world'",
+	)
+	testing.expect(
+		t,
+		request_handle.request.version == "HTTP/1.1",
+		"Expected request version to be 'HTTP/1.1'",
+	)
+
 	// Test header parsing
 	host_header, has_host := request_handle.request.headers["host"]
 	testing.expect(t, has_host, "Expected Host header to be present")
 	testing.expect(t, host_header == "localhost", "Expected Host header to be 'localhost'")
-	
+
 	user_agent, has_ua := request_handle.request.headers["user-agent"]
 	testing.expect(t, has_ua, "Expected User-Agent header to be present")
 	testing.expect(t, user_agent == "TestClient", "Expected User-Agent header to be 'TestClient'")
@@ -758,13 +799,25 @@ test_parse_http_request :: proc(t: ^testing.T) {
 	buffer = transmute([]byte)post_request
 	request_handle, parse_err = parse_http_request(buffer, len(buffer))
 	testing.expect(t, parse_err == HTTP_Parse_Error.NONE, "Expected no parse error for POST")
-	testing.expect(t, request_handle.request.type == HTTP_Request_Type.POST, "Expected request type to be POST")
-	testing.expect(t, request_handle.request.body == "{\"message\":\"Hello, World!\"}", "Expected body to be parsed correctly")
-	
+	testing.expect(
+		t,
+		request_handle.request.type == HTTP_Request_Type.POST,
+		"Expected request type to be POST",
+	)
+	testing.expect(
+		t,
+		request_handle.request.body == "{\"message\":\"Hello, World!\"}",
+		"Expected body to be parsed correctly",
+	)
+
 	content_type, has_ct := request_handle.request.headers["content-type"]
 	testing.expect(t, has_ct, "Expected Content-Type header to be present")
-	testing.expect(t, content_type == "application/json", "Expected Content-Type to be 'application/json'")
-	
+	testing.expect(
+		t,
+		content_type == "application/json",
+		"Expected Content-Type to be 'application/json'",
+	)
+
 	// clean up allocations by the parsing
 	delete(request_handle.request.path)
 	delete(request_handle.request.version)
@@ -779,8 +832,12 @@ test_parse_http_request :: proc(t: ^testing.T) {
 	raw_request = "INVALID /hello/world HTTP/1.1\r\nHost: localhost\r\n\r\n"
 	buffer = transmute([]byte)raw_request
 	_, parse_err = parse_http_request(buffer, len(buffer))
-	testing.expect(t, parse_err == HTTP_Parse_Error.UNSUPPORTED_METHOD, "Expected unsupported method error")
-	
+	testing.expect(
+		t,
+		parse_err == HTTP_Parse_Error.UNSUPPORTED_METHOD,
+		"Expected unsupported method error",
+	)
+
 	raw_request = "GET /hello/world\r\nHost: localhost\r\n\r\n"
 	buffer = transmute([]byte)raw_request
 	_, parse_err = parse_http_request(buffer, len(buffer))
@@ -795,6 +852,7 @@ test_parse_http_request :: proc(t: ^testing.T) {
 //
 // Notes: Reads up to maxRequestSize bytes. Supports GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, CONNECT.
 //        Matches static routes first, then templated ones. Logs request and errors. Closes client socket on exit.
+@(private)
 handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config) {
 	context.logger = (server_config^).logger
 	defer net.close(client)
@@ -885,7 +943,11 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 
 	for route in (server_config^).routes {
 		if strings.contains(route.path, ":") && route.type == request_handle.request.type {
-			if match_route(route.path, request_handle.request.path, &request_handle.request.params) {
+			if match_route(
+				route.path,
+				request_handle.request.path,
+				&request_handle.request.params,
+			) {
 				route.handler(request_handle)
 				return
 			}
@@ -896,7 +958,11 @@ handle_client :: proc(client: net.TCP_Socket, server_config: ^HTTP_Server_Config
 		request_handle.conn,
 		HTTP_Response_Code.NOT_FOUND,
 		strings.concatenate(
-			[]string{"You are requesting: ", request_handle.request.path, " which doesn't exist :("},
+			[]string {
+				"You are requesting: ",
+				request_handle.request.path,
+				" which doesn't exist :(",
+			},
 		),
 		HTTP_Content_Type.TEXT_PLAIN,
 	)
